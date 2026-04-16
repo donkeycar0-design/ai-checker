@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, RefreshCw, AlertCircle, CheckCircle2, Car, Calendar, Zap, Github, Info, ShieldCheck } from 'lucide-react';
+import { Camera, RefreshCw, AlertCircle, CheckCircle2, Car, Zap, ShieldCheck } from 'lucide-react';
 
 const App = () => {
   const [stream, setStream] = useState(null);
@@ -7,12 +7,11 @@ const App = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [cameraStatus, setCameraStatus] = useState('initializing');
-  
   const videoRef = useRef(null);
 
   /**
-   * API Key Configuration
+   * API Configuration
+   * AI 연동을 위한 API 키와 모델 설정입니다.
    */
   const apiKey = "AQ.Ab8RN6J8tDPSkKxt7uViAErMhX_yD1yGfrhKx5uKTF3EFdlAUw";
   const MODEL_NAME = "gemini-1.5-flash"; 
@@ -23,68 +22,41 @@ const App = () => {
 
   useEffect(() => {
     startCamera();
-    return () => stopCamera();
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
   }, []);
 
-  const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
-  };
-
   const startCamera = async () => {
-    setCameraStatus('initializing');
     setError(null);
     try {
       const constraints = {
-        video: { 
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 }
-        }
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
       };
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(newStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = newStream;
-      }
-      setCameraStatus('ready');
+      if (videoRef.current) videoRef.current.srcObject = newStream;
     } catch (err) {
-      setError("Camera permission denied. Please allow access in settings.");
-      setCameraStatus('error');
+      setError("카메라 권한을 허용해주세요. (Camera access denied)");
     }
-  };
-
-  const getOptimizedBase64 = (videoElement) => {
-    const canvas = document.createElement('canvas');
-    const MAX_WIDTH = 1024; 
-    let width = videoElement.videoWidth;
-    let height = videoElement.videoHeight;
-
-    if (width > MAX_WIDTH) {
-      height *= MAX_WIDTH / width;
-      width = MAX_WIDTH;
-    }
-
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoElement, 0, 0, width, height);
-    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
   };
 
   const captureAndAnalyze = async () => {
-    if (!videoRef.current || !apiKey) {
-        setError("Configuration Error: API Key missing or camera not ready.");
-        return;
-    }
+    if (!videoRef.current) return;
 
-    const base64Data = getOptimizedBase64(videoRef.current);
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoRef.current, 0, 0);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
     setPhoto(`data:image/jpeg;base64,${base64Data}`);
     setIsAnalyzing(true);
     setResult(null);
     setError(null);
 
-    const prompt = "Identify the South Korean license plate in this image. Focus on the full plate string and the very last digit. Return ONLY a JSON object: {\"plateNumber\": \"string\", \"lastDigit\": number}. If no plate is found, return {\"error\": \"NOT_FOUND\"}.";
+    const prompt = "Identify the South Korean license plate. Return ONLY a JSON: {\"plateNumber\": \"string\", \"lastDigit\": number}. If not found, return {\"error\": \"NOT_FOUND\"}.";
 
     try {
       const response = await fetch(
@@ -93,43 +65,28 @@ const App = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
-              ]
-            }]
+            contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }]
           })
         }
       );
 
-      if (!response.ok) {
-        const errorDetail = await response.json();
-        throw new Error(errorDetail.error?.message || "Server response error");
-      }
-
       const data = await response.json();
       const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!textResponse) throw new Error("No response data from AI.");
-      
       const cleanJson = textResponse.replace(/```json|```/g, "").trim();
       const analysis = JSON.parse(cleanJson);
 
-      if (analysis.error || isNaN(parseInt(analysis.lastDigit))) {
-        setError("License plate not recognized. Please try again with a clearer shot.");
+      if (analysis.error) {
+        setError("번호판을 인식하지 못했습니다. 다시 시도해주세요.");
       } else {
         const lastDigit = parseInt(analysis.lastDigit);
-        const isEvenPlate = lastDigit % 2 === 0;
         setResult({
           plateNumber: analysis.plateNumber,
           lastDigit: lastDigit,
-          isViolation: isEvenDay !== isEvenPlate
+          isViolation: isEvenDay !== (lastDigit % 2 === 0)
         });
       }
     } catch (err) {
-      console.error(err);
-      setError(`Analysis Failed: ${err.message}`);
+      setError("분석 중 오류가 발생했습니다.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -143,15 +100,15 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0c10] text-slate-100 flex flex-col items-center font-sans selection:bg-indigo-500/30">
-      {/* Header with Developer Info */}
-      <header className="w-full p-4 bg-[#0d1117]/95 backdrop-blur-xl flex justify-between items-center border-b border-white/5 sticky top-0 z-30 shadow-2xl">
+    <div className="min-h-screen bg-[#0a0c10] text-slate-100 flex flex-col items-center font-sans">
+      {/* Header: 개발자 정보 포함 */}
+      <header className="w-full p-4 bg-[#0d1117]/95 backdrop-blur-xl flex justify-between items-center border-b border-white/5 sticky top-0 z-30">
         <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg shadow-indigo-500/30">
+          <div className="bg-indigo-600 p-2.5 rounded-xl">
             <Car className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="font-black text-sm tracking-tight text-white leading-tight">AI Traffic Checker</h1>
+            <h1 className="font-black text-sm text-white leading-tight">AI Traffic Checker</h1>
             <div className="flex items-center gap-1.5 mt-0.5">
                <ShieldCheck size={10} className="text-indigo-400" />
                <p className="text-[9px] text-indigo-400 font-black uppercase tracking-[0.15em]">Dev by Teach for Future Vibe Coding Lab</p>
@@ -159,35 +116,31 @@ const App = () => {
           </div>
         </div>
 
-        {/* Highlighted Day Status (English) */}
         <div className="flex flex-col items-end">
-          <p className="text-[8px] text-slate-500 font-bold mb-1 px-1 uppercase tracking-tighter">DATE: {today.toDateString()}</p>
-          <div className={`px-4 py-1.5 rounded-full border-2 font-black text-[10px] flex items-center gap-2 shadow-lg transition-all transform hover:scale-105 duration-300 ${isEvenDay ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-orange-600/20 border-orange-500 text-orange-400'}`}>
+          <p className="text-[8px] text-slate-500 font-bold mb-1 uppercase tracking-tighter">{today.toDateString()}</p>
+          <div className={`px-4 py-1.5 rounded-full border-2 font-black text-[10px] flex items-center gap-2 ${isEvenDay ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-orange-600/20 border-orange-500 text-orange-400'}`}>
             <div className={`w-2 h-2 rounded-full ${isEvenDay ? 'bg-blue-400' : 'bg-orange-400'} animate-ping`} />
-            {isEvenDay ? 'EVEN DAY' : 'ODD DAY'}
+            {isEvenDay ? 'EVEN DAY (짝수날)' : 'ODD DAY (홀수날)'}
           </div>
         </div>
       </header>
 
-      <main className="w-full max-w-md p-4 flex-1 flex flex-col gap-6">
-        {/* Camera Viewport */}
-        <div className="relative aspect-[3/4] bg-slate-900 rounded-[2.5rem] overflow-hidden border border-white/10 shadow-2xl ring-1 ring-white/5">
+      <main className="w-full max-w-md p-4 flex flex-col gap-6">
+        {/* 카메라 뷰포트 */}
+        <div className="relative aspect-[3/4] bg-slate-900 rounded-[2.5rem] overflow-hidden border border-white/10 shadow-2xl">
           {!photo ? (
             <>
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover opacity-80" />
               <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-                <div className="w-72 h-44 border-2 border-white/20 rounded-[2rem] relative overflow-hidden backdrop-brightness-110">
+                <div className="w-72 h-44 border-2 border-white/20 rounded-[2rem] relative overflow-hidden">
                    <div className="absolute inset-0 bg-indigo-500/5 animate-pulse" />
-                   <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-xl" />
-                   <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-xl" />
-                   <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-xl" />
-                   <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-xl" />
+                   <div className="h-0.5 w-full bg-indigo-500 absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]" style={{boxShadow: '0 0 15px #6366f1'}} />
                 </div>
-                <p className="mt-8 text-[10px] font-black text-white/70 bg-black/60 px-5 py-2 rounded-full border border-white/10 backdrop-blur-md uppercase tracking-[0.2em]">Scan Plate Number</p>
+                <p className="mt-8 text-[10px] font-black text-white/70 bg-black/60 px-5 py-2 rounded-full border border-white/10 uppercase tracking-[0.2em]">Scan Plate Number</p>
               </div>
               <div className="absolute bottom-10 left-0 right-0 flex justify-center">
-                <button onClick={captureAndAnalyze} className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-1 active:scale-90 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.2)] group">
-                  <div className="w-full h-full rounded-full border-[6px] border-slate-950 flex items-center justify-center bg-slate-950 group-hover:bg-indigo-600 transition-colors">
+                <button onClick={captureAndAnalyze} className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-1 active:scale-90 transition-transform shadow-xl">
+                  <div className="w-full h-full rounded-full border-[6px] border-slate-950 flex items-center justify-center bg-slate-950 hover:bg-indigo-600 transition-colors">
                     <Camera className="text-white" size={28} />
                   </div>
                 </button>
@@ -197,89 +150,58 @@ const App = () => {
             <>
               <img src={photo} alt="captured" className="w-full h-full object-cover" />
               {isAnalyzing && (
-                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center backdrop-blur-2xl">
-                  <div className="relative mb-6">
-                    <RefreshCw className="animate-spin text-indigo-500" size={64} strokeWidth={1.5} />
-                    <Zap className="absolute inset-0 m-auto text-yellow-400 fill-yellow-400 animate-pulse" size={24} />
-                  </div>
-                  <h3 className="text-xl font-black tracking-tight text-white uppercase">AI Processing...</h3>
-                  <p className="text-indigo-400 text-[10px] mt-2 font-bold uppercase tracking-[0.3em]">Analyzing Visual Data</p>
+                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center backdrop-blur-xl">
+                  <RefreshCw className="animate-spin text-indigo-500 mb-4" size={48} />
+                  <h3 className="text-lg font-black text-white uppercase tracking-widest">AI Analyzing...</h3>
                 </div>
               )}
             </>
           )}
         </div>
 
-        {/* Results in English */}
+        {/* 분석 결과 */}
         {result && (
           <div className={`p-8 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-6 duration-500 border-4 ${result.isViolation ? 'bg-red-500/10 border-red-500/40' : 'bg-emerald-500/10 border-emerald-500/40'}`}>
-            <div className="flex justify-between items-start mb-8">
+            <div className="flex justify-between items-start mb-6">
               <div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>Analysis Result</span>
+                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>판독 결과</span>
                 <h2 className="text-4xl font-black text-white mt-2 tracking-tighter">{result.plateNumber}</h2>
               </div>
-              <div className={`p-4 rounded-[1.5rem] shadow-xl ${result.isViolation ? 'bg-red-600' : 'bg-emerald-600'}`}>
-                {result.isViolation ? <AlertCircle size={32} color="white" strokeWidth={3} /> : <CheckCircle2 size={32} color="white" strokeWidth={3} />}
+              <div className={`p-4 rounded-[1.5rem] ${result.isViolation ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                {result.isViolation ? <AlertCircle size={32} color="white" /> : <CheckCircle2 size={32} color="white" />}
               </div>
             </div>
 
-            <div className="bg-black/60 rounded-3xl p-6 border border-white/5 mb-8 backdrop-blur-sm">
-               <p className={`text-2xl font-black mb-3 leading-tight ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {result.isViolation ? "DRIVING RESTRICTED" : "AUTHORIZED TO DRIVE"}
+            <div className="bg-black/60 rounded-3xl p-6 border border-white/5 mb-6">
+               <p className={`text-2xl font-black mb-2 ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {result.isViolation ? "운행 제한 대상" : "운행 가능 차량"}
                </p>
-               <div className="h-px bg-white/10 w-full mb-4" />
-               <div className="space-y-2">
-                 <p className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">Reasoning</p>
-                 <p className="text-sm text-slate-200 leading-relaxed font-bold">
-                    Today is an <span className={`${isEvenDay ? 'text-blue-400' : 'text-orange-400'}`}>{isEvenDay ? 'EVEN' : 'ODD'} day</span>.<br />
-                    Plate digit ends in <span className="text-white text-lg underline">"{result.lastDigit}"</span>.
-                 </p>
-               </div>
+               <p className="text-sm text-slate-300 font-bold leading-relaxed">
+                  오늘은 <span className="text-white">{isEvenDay ? '짝수' : '홀수'}날</span>이며, <br />
+                  차량 끝자리가 <span className="text-white underline font-black text-lg">"{result.lastDigit}"</span>번입니다.
+               </p>
             </div>
 
-            <button onClick={reset} className="w-full py-5 bg-white text-slate-950 rounded-2xl font-black text-lg active:scale-95 transition-all shadow-xl shadow-black/40 uppercase tracking-widest">
-                Check Another
+            <button onClick={reset} className="w-full py-5 bg-white text-slate-950 rounded-2xl font-black text-lg active:scale-95 transition-all shadow-xl uppercase tracking-widest">
+                다시 스캔하기
             </button>
           </div>
         )}
 
-        {/* Error State in English */}
         {error && !isAnalyzing && (
-          <div className="p-8 bg-slate-900 border border-red-500/30 rounded-[2.5rem] text-center shadow-2xl animate-in zoom-in-95">
-            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-               <AlertCircle className="text-red-500" size={32} />
-            </div>
-            <p className="font-black text-slate-200 text-base mb-8 leading-snug">{error}</p>
-            <button onClick={reset} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg uppercase tracking-widest active:scale-95 transition-all">
-               Retry Scanning
+          <div className="p-8 bg-slate-900 border border-red-500/30 rounded-[2.5rem] text-center shadow-2xl">
+            <AlertCircle className="text-red-500 mx-auto mb-4" size={40} />
+            <p className="font-bold text-slate-200 mb-6">{error}</p>
+            <button onClick={reset} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black uppercase active:scale-95 transition-all">
+               재시도
             </button>
-          </div>
-        )}
-        
-        {!result && !error && (
-          <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-[2rem] p-6 flex gap-4 items-start shadow-inner">
-            <div className="bg-indigo-600/20 p-2.5 rounded-xl text-indigo-400">
-              <Zap size={20} />
-            </div>
-            <div>
-              <h4 className="text-[10px] font-black text-white mb-2 uppercase tracking-[0.2em]">Compliance Guidelines</h4>
-              <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
-                The AI automatically detects the last digit of the license plate to determine access based on the date.
-                <br /><br />
-                <span className="text-indigo-300 font-bold uppercase">Status: Driving is allowed for {isEvenDay ? 'EVEN' : 'ODD'} numbers today.</span>
-              </p>
-            </div>
           </div>
         )}
       </main>
       
-      <footer className="w-full py-10 flex flex-col items-center gap-2 opacity-30">
+      <footer className="w-full py-10 flex flex-col items-center opacity-30">
         <p className="text-[9px] font-black uppercase tracking-[0.3em] text-slate-500">Smart City Mobility Solutions</p>
       </footer>
-
-      {/* Background Decor */}
-      <div className="fixed -bottom-40 -left-40 w-96 h-96 bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="fixed -top-40 -right-40 w-96 h-96 bg-blue-600/10 rounded-full blur-[120px] pointer-events-none" />
     </div>
   );
 };

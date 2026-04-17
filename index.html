@@ -1,237 +1,255 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Camera, RefreshCw, AlertCircle, CheckCircle2, Car, Zap, ShieldCheck } from 'lucide-react';
-
-/**
- * AI Traffic Checker - Integrated Version
- * [필독] API 키 및 모델 설정이 완료되었습니다.
- * Dev by Teach for Future Vibe Coding Lab
- */
-const App = () => {
-  const [stream, setStream] = useState(null);
-  const [photo, setPhoto] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-  const videoRef = useRef(null);
-
-  // API Configuration
-  const apiKey = "AQ.Ab8RN6J8tDPSkKxt7uViAErMhX_yD1yGfrhKx5uKTF3EFdlAUw";
-  const MODEL_NAME = "gemini-1.5-flash"; 
-
-  const today = new Date();
-  const day = today.getDate();
-  const isEvenDay = day % 2 === 0;
-
-  useEffect(() => {
-    startCamera();
-    return () => {
-      if (stream) stream.getTracks().forEach(track => track.stop());
-    };
-  }, []);
-
-  const startCamera = async () => {
-    setError(null);
-    try {
-      const constraints = {
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
-      };
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      setStream(newStream);
-      if (videoRef.current) videoRef.current.srcObject = newStream;
-    } catch (err) {
-      setError("카메라 권한을 허용해주세요. (Camera access denied)");
-    }
-  };
-
-  const captureAndAnalyze = async () => {
-    if (!videoRef.current) return;
-
-    // Canvas를 이용한 캡처
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoRef.current, 0, 0);
-    const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-
-    setPhoto(`data:image/jpeg;base64,${base64Data}`);
-    setIsAnalyzing(true);
-    setResult(null);
-    setError(null);
-
-    const prompt = "Identify the South Korean license plate. Return ONLY a JSON: {\"plateNumber\": \"string\", \"lastDigit\": number}. If not found, return {\"error\": \"NOT_FOUND\"}.";
-
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }]
-          })
-        }
-      );
-
-      const data = await response.json();
-      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const cleanJson = textResponse.replace(/```json|```/g, "").trim();
-      const analysis = JSON.parse(cleanJson);
-
-      if (analysis.error) {
-        setError("번호판을 인식하지 못했습니다. 다시 시도해주세요.");
-      } else {
-        const lastDigit = parseInt(analysis.lastDigit);
-        setResult({
-          plateNumber: analysis.plateNumber,
-          lastDigit: lastDigit,
-          isViolation: isEvenDay !== (lastDigit % 2 === 0)
-        });
-      }
-    } catch (err) {
-      setError("분석 중 오류가 발생했습니다.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const reset = () => {
-    setPhoto(null);
-    setResult(null);
-    setError(null);
-    startCamera();
-  };
-
-  return (
-    <div className="min-h-screen bg-[#0a0c10] text-slate-100 flex flex-col items-center font-sans overflow-x-hidden">
-      {/* Header: 개발자 정보와 날짜 상태 포함 */}
-      <header className="w-full p-4 bg-[#0d1117]/95 backdrop-blur-xl flex justify-between items-center border-b border-white/5 sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">
-            <Car className="text-white" size={22} />
-          </div>
-          <div>
-            <h1 className="font-black text-sm text-white leading-tight">AI Traffic Checker</h1>
-            <div className="flex items-center gap-1.5 mt-0.5">
-               <ShieldCheck size={10} className="text-indigo-400" />
-               <p className="text-[9px] text-indigo-400 font-black uppercase tracking-[0.15em]">Dev by Teach for Future Vibe Coding Lab</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-end">
-          <p className="text-[8px] text-slate-500 font-bold mb-1 uppercase tracking-tighter">{today.toDateString()}</p>
-          <div className={`px-4 py-1.5 rounded-full border-2 font-black text-[10px] flex items-center gap-2 ${isEvenDay ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-orange-600/20 border-orange-500 text-orange-400'}`}>
-            <div className={`w-2 h-2 rounded-full ${isEvenDay ? 'bg-blue-400' : 'bg-orange-400'} animate-ping`} />
-            {isEvenDay ? 'EVEN DAY (짝수날)' : 'ODD DAY (홀수날)'}
-          </div>
-        </div>
-      </header>
-
-      <main className="w-full max-w-md p-4 flex flex-col gap-6">
-        {/* 카메라 뷰포트 / 스캔 영역 */}
-        <div className="relative aspect-[3/4] bg-slate-900 rounded-[2.5rem] overflow-hidden border border-white/10 shadow-2xl ring-1 ring-white/5">
-          {!photo ? (
-            <>
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover opacity-80" />
-              <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-                <div className="w-72 h-44 border-2 border-white/20 rounded-[2rem] relative overflow-hidden backdrop-brightness-110">
-                   <div className="absolute inset-0 bg-indigo-500/5 animate-pulse" />
-                   <div className="h-0.5 w-full bg-indigo-500 absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]" style={{boxShadow: '0 0 15px #6366f1'}} />
-                </div>
-                <p className="mt-8 text-[10px] font-black text-white/70 bg-black/60 px-5 py-2 rounded-full border border-white/10 uppercase tracking-[0.2em] backdrop-blur-md">Scan Plate Number</p>
-              </div>
-              <div className="absolute bottom-10 left-0 right-0 flex justify-center">
-                <button onClick={captureAndAnalyze} className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-1 active:scale-90 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.2)] group">
-                  <div className="w-full h-full rounded-full border-[6px] border-slate-950 flex items-center justify-center bg-slate-950 hover:bg-indigo-600 transition-colors">
-                    <Camera className="text-white" size={28} />
-                  </div>
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <img src={photo} alt="captured" className="w-full h-full object-cover" />
-              {isAnalyzing && (
-                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center backdrop-blur-2xl z-20">
-                  <RefreshCw className="animate-spin text-indigo-500 mb-4" size={48} />
-                  <h3 className="text-xl font-black text-white uppercase tracking-widest">AI Analyzing...</h3>
-                  <p className="text-indigo-400 text-[10px] mt-2 font-bold uppercase tracking-[0.3em]">Processing Visual Data</p>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* 분석 결과 카드 */}
-        {result && (
-          <div className={`p-8 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-6 duration-500 border-4 ${result.isViolation ? 'bg-red-500/10 border-red-500/40' : 'bg-emerald-500/10 border-emerald-500/40'}`}>
-            <div className="flex justify-between items-start mb-8">
-              <div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>판독 결과 (Analysis Result)</span>
-                <h2 className="text-4xl font-black text-white mt-2 tracking-tighter">{result.plateNumber}</h2>
-              </div>
-              <div className={`p-4 rounded-[1.5rem] shadow-xl ${result.isViolation ? 'bg-red-600' : 'bg-emerald-600'}`}>
-                {result.isViolation ? <AlertCircle size={32} color="white" strokeWidth={3} /> : <CheckCircle2 size={32} color="white" strokeWidth={3} />}
-              </div>
-            </div>
-
-            <div className="bg-black/60 rounded-3xl p-6 border border-white/5 mb-8 backdrop-blur-sm">
-               <p className={`text-2xl font-black mb-3 leading-tight uppercase ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {result.isViolation ? "Driving Restricted" : "Authorized to Drive"}
-               </p>
-               <div className="h-px bg-white/10 w-full mb-4"></div>
-               <p className="text-sm text-slate-300 font-bold leading-relaxed">
-                  오늘은 <span className="text-white underline">{isEvenDay ? '짝수' : '홀수'}날</span>이며, <br />
-                  차량 번호 끝자리가 <span className="text-white font-black text-lg underline">"{result.lastDigit}"</span>번으로 확인되었습니다.
-               </p>
-            </div>
-
-            <button onClick={reset} className="w-full py-5 bg-white text-slate-950 rounded-2xl font-black text-lg active:scale-95 transition-all shadow-xl shadow-black/40 uppercase tracking-widest">
-                Check Another (다시 스캔)
-            </button>
-          </div>
-        )}
-
-        {/* 에러 상태 */}
-        {error && !isAnalyzing && (
-          <div className="p-8 bg-slate-900 border-4 border-red-500/30 rounded-[2.5rem] text-center shadow-2xl animate-in fade-in duration-300">
-            <AlertCircle className="text-red-500 mx-auto mb-4" size={48} />
-            <h4 className="text-white font-black text-xl mb-2">Recognition Failed</h4>
-            <p className="font-bold text-slate-400 mb-8 leading-relaxed text-sm">{error}</p>
-            <button onClick={reset} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black uppercase active:scale-95 transition-all shadow-lg shadow-red-900/20">
-               Retry (재시도)
-            </button>
-          </div>
-        )}
-
-        {/* 하단 안내 카드 */}
-        <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-[2rem] p-6 flex gap-4 items-start shadow-inner">
-          <div className="bg-indigo-600/20 p-2.5 rounded-xl text-indigo-400">
-            <Zap size={20} />
-          </div>
-          <div>
-            <h4 className="text-[10px] font-black text-white mb-2 uppercase tracking-[0.2em]">Compliance Guidelines</h4>
-            <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
-              The AI automatically detects the last digit of the license plate to determine access based on the date.
-            </p>
-          </div>
-        </div>
-      </main>
-      
-      <footer className="w-full py-10 flex flex-col items-center opacity-30 gap-2">
-        <p className="text-[9px] font-black uppercase tracking-[0.3em] text-slate-500">Smart City Mobility Solutions</p>
-      </footer>
-
-      <style dangerouslySetInnerHTML={{ __html: `
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Traffic Checker - Teach for Future</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel for Browser Compilation -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0a0c10; margin: 0; }
         @keyframes scan {
-          0% { top: 10%; opacity: 0; }
-          50% { opacity: 1; }
-          100% { top: 90%; opacity: 0; }
+            0% { top: 10%; opacity: 0; }
+            50% { opacity: 1; }
+            100% { top: 90%; opacity: 0; }
         }
-      `}} />
-    </div>
-  );
-};
+        .scan-line {
+            animation: scan 2s ease-in-out infinite;
+            box-shadow: 0 0 15px #6366f1;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-export default App;
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+        
+        // Lucide 아이콘 컴포넌트 래퍼
+        const Icon = ({ name, size = 24, color = "currentColor", className = "", strokeWidth = 2 }) => {
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size, color: color }} className={className} stroke-width={strokeWidth}></i>;
+        };
+
+        const App = () => {
+            const [stream, setStream] = useState(null);
+            const [photo, setPhoto] = useState(null);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [result, setResult] = useState(null);
+            const [error, setError] = useState(null);
+            const videoRef = useRef(null);
+
+            const apiKey = "AQ.Ab8RN6J8tDPSkKxt7uViAErMhX_yD1yGfrhKx5uKTF3EFdlAUw";
+            const MODEL_NAME = "gemini-1.5-flash"; 
+
+            const today = new Date();
+            const isEvenDay = today.getDate() % 2 === 0;
+
+            useEffect(() => {
+                startCamera();
+                return () => {
+                    if (stream) stream.getTracks().forEach(track => track.stop());
+                };
+            }, []);
+
+            const startCamera = async () => {
+                setError(null);
+                try {
+                    const constraints = {
+                        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
+                    };
+                    const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    setStream(newStream);
+                    if (videoRef.current) videoRef.current.srcObject = newStream;
+                } catch (err) {
+                    setError("카메라 권한을 허용해주세요. (Camera access denied)");
+                }
+            };
+
+            const captureAndAnalyze = async () => {
+                if (!videoRef.current) return;
+
+                const canvas = document.createElement('canvas');
+                canvas.width = videoRef.current.videoWidth;
+                canvas.height = videoRef.current.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(videoRef.current, 0, 0);
+                const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+                setPhoto(`data:image/jpeg;base64,${base64Data}`);
+                setIsAnalyzing(true);
+                setResult(null);
+                setError(null);
+
+                const prompt = "Identify the South Korean license plate. Return ONLY a JSON: {\"plateNumber\": \"string\", \"lastDigit\": number}. If not found, return {\"error\": \"NOT_FOUND\"}.";
+
+                try {
+                    const response = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }]
+                            })
+                        }
+                    );
+
+                    const data = await response.json();
+                    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    const cleanJson = textResponse.replace(/```json|```/g, "").trim();
+                    const analysis = JSON.parse(cleanJson);
+
+                    if (analysis.error) {
+                        setError("번호판을 인식하지 못했습니다. 다시 시도해주세요.");
+                    } else {
+                        const lastDigit = parseInt(analysis.lastDigit);
+                        setResult({
+                            plateNumber: analysis.plateNumber,
+                            lastDigit: lastDigit,
+                            isViolation: isEvenDay !== (lastDigit % 2 === 0)
+                        });
+                    }
+                } catch (err) {
+                    setError("분석 중 오류가 발생했습니다.");
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            const reset = () => {
+                setPhoto(null);
+                setResult(null);
+                setError(null);
+                startCamera();
+            };
+
+            return (
+                <div className="min-h-screen bg-[#0a0c10] text-slate-100 flex flex-col items-center font-sans overflow-x-hidden">
+                    <header className="w-full p-4 bg-[#0d1117]/95 backdrop-blur-xl flex justify-between items-center border-b border-white/5 sticky top-0 z-50">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">
+                                <Icon name="car" color="white" size={22} />
+                            </div>
+                            <div>
+                                <h1 className="font-black text-sm text-white leading-tight">AI Traffic Checker</h1>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                    <Icon name="shield-check" color="#818cf8" size={10} />
+                                    <p className="text-[9px] text-indigo-400 font-black uppercase tracking-[0.15em]">Dev by Teach for Future Vibe Coding Lab</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-end">
+                            <p className="text-[8px] text-slate-500 font-bold mb-1 uppercase tracking-tighter">{today.toDateString()}</p>
+                            <div className={`px-4 py-1.5 rounded-full border-2 font-black text-[10px] flex items-center gap-2 ${isEvenDay ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-orange-600/20 border-orange-500 text-orange-400'}`}>
+                                <div className={`w-2 h-2 rounded-full ${isEvenDay ? 'bg-blue-400' : 'bg-orange-400'} animate-ping`} />
+                                {isEvenDay ? 'EVEN DAY (짝수날)' : 'ODD DAY (홀수날)'}
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="w-full max-w-md p-4 flex flex-col gap-6">
+                        <div className="relative aspect-[3/4] bg-slate-900 rounded-[2.5rem] overflow-hidden border border-white/10 shadow-2xl">
+                            {!photo ? (
+                                <>
+                                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover opacity-80" />
+                                    <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+                                        <div className="w-72 h-44 border-2 border-white/20 rounded-[2rem] relative overflow-hidden">
+                                            <div className="absolute inset-0 bg-indigo-500/5 animate-pulse" />
+                                            <div className="h-0.5 w-full bg-indigo-500 absolute top-1/2 scan-line" />
+                                        </div>
+                                        <p className="mt-8 text-[10px] font-black text-white/70 bg-black/60 px-5 py-2 rounded-full border border-white/10 uppercase tracking-[0.2em] backdrop-blur-md">Scan Plate Number</p>
+                                    </div>
+                                    <div className="absolute bottom-10 left-0 right-0 flex justify-center">
+                                        <button onClick={captureAndAnalyze} className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-1 active:scale-90 transition-transform shadow-xl group">
+                                            <div className="w-full h-full rounded-full border-[6px] border-slate-950 flex items-center justify-center bg-slate-950 hover:bg-indigo-600 transition-colors">
+                                                <Icon name="camera" color="white" size={28} />
+                                            </div>
+                                        </button>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <img src={photo} alt="captured" className="w-full h-full object-cover" />
+                                    {isAnalyzing && (
+                                        <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center backdrop-blur-2xl z-20">
+                                            <Icon name="refresh-cw" color="#6366f1" size={48} className="animate-spin mb-4" />
+                                            <h3 className="text-xl font-black text-white uppercase tracking-widest">AI Analyzing...</h3>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+
+                        {result && (
+                            <div className={`p-8 rounded-[2.5rem] shadow-2xl border-4 ${result.isViolation ? 'bg-red-500/10 border-red-500/40' : 'bg-emerald-500/10 border-emerald-500/40'}`}>
+                                <div className="flex justify-between items-start mb-8">
+                                    <div>
+                                        <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>판독 결과 (Analysis Result)</span>
+                                        <h2 className="text-4xl font-black text-white mt-2 tracking-tighter">{result.plateNumber}</h2>
+                                    </div>
+                                    <div className={`p-4 rounded-[1.5rem] shadow-xl ${result.isViolation ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                                        <Icon name={result.isViolation ? "alert-circle" : "check-circle-2"} color="white" size={32} strokeWidth={3} />
+                                    </div>
+                                </div>
+                                <div className="bg-black/60 rounded-3xl p-6 border border-white/5 mb-8 backdrop-blur-sm">
+                                    <p className={`text-2xl font-black mb-3 leading-tight uppercase ${result.isViolation ? 'text-red-400' : 'text-emerald-400'}`}>
+                                        {result.isViolation ? "Driving Restricted" : "Authorized to Drive"}
+                                    </p>
+                                    <p className="text-sm text-slate-300 font-bold leading-relaxed">
+                                        오늘은 <span className="text-white underline">{isEvenDay ? '짝수' : '홀수'}날</span>이며, <br />
+                                        차량 번호 끝자리가 <span className="text-white font-black text-lg underline">"{result.lastDigit}"</span>번으로 확인되었습니다.
+                                    </p>
+                                </div>
+                                <button onClick={reset} className="w-full py-5 bg-white text-slate-950 rounded-2xl font-black text-lg active:scale-95 transition-all shadow-xl uppercase tracking-widest">
+                                    Retry (다시 스캔)
+                                </button>
+                            </div>
+                        )}
+
+                        {error && !isAnalyzing && (
+                            <div className="p-8 bg-slate-900 border-4 border-red-500/30 rounded-[2.5rem] text-center shadow-2xl">
+                                <Icon name="alert-circle" color="#ef4444" size={48} className="mx-auto mb-4" />
+                                <h4 className="text-white font-black text-xl mb-2">Recognition Failed</h4>
+                                <p className="font-bold text-slate-400 mb-8 leading-relaxed text-sm">{error}</p>
+                                <button onClick={reset} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black uppercase active:scale-95 transition-all shadow-lg">
+                                    Retry
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-[2rem] p-6 flex gap-4 items-start shadow-inner">
+                            <div className="bg-indigo-600/20 p-2.5 rounded-xl text-indigo-400">
+                                <Icon name="zap" size={20} />
+                            </div>
+                            <div>
+                                <h4 className="text-[10px] font-black text-white mb-2 uppercase tracking-[0.2em]">Compliance Guidelines</h4>
+                                <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+                                    The AI automatically detects the last digit of the license plate to determine access based on the date.
+                                </p>
+                            </div>
+                        </div>
+                    </main>
+                    
+                    <footer className="w-full py-10 flex flex-col items-center opacity-30 gap-2">
+                        <p className="text-[9px] font-black uppercase tracking-[0.3em] text-slate-500">Smart City Mobility Solutions</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
